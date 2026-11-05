@@ -1,0 +1,84 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+profile_path="${script_dir}/profiles/default.yaml"
+compose_file="${script_dir}/../docker-compose.yml"
+jepsen_args=()
+explicit_ssh_key=false
+if [[ -f "${compose_file}" ]]; then
+    echo "Building and starting the stand (the image build output is hidden)..."
+    docker compose --progress quiet -f "${compose_file}" up -d --build
+    echo "Stand is up, running the test (about 15 minutes)..."
+    status=0
+    docker compose -f "${compose_file}" exec -T test /root/jepsen/run-test "$@" || status=$?
+    # The results live in the test container; keep a copy next to this script.
+    mkdir -p "${script_dir}/store"
+    docker compose -f "${compose_file}" cp test:/root/jepsen/store/. "${script_dir}/store/"
+    echo "Results: ${script_dir}/store/patroni/latest (history.edn, results.edn, jepsen.log)"
+    if [[ -z "${JEPSEN_KEEP_STAND:-}" ]]; then
+        echo "Stopping the stand (JEPSEN_KEEP_STAND=1 keeps it running)..."
+        docker compose --progress quiet -f "${compose_file}" down -v
+    fi
+    exit "${status}"
+fi
+
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --profile)
+            if [[ $# -lt 2 ]]; then
+                echo "--profile requires a path" >&2
+                exit 2
+            fi
+            profile_path="$2"
+            shift 2
+            ;;
+        --ssh-private-key)
+            if [[ $# -lt 2 ]]; then
+                echo "--ssh-private-key requires a path" >&2
+                exit 2
+            fi
+            explicit_ssh_key=true
+            jepsen_args+=("$1" "$2")
+            shift 2
+            ;;
+        --ssh-private-key=*)
+            explicit_ssh_key=true
+            jepsen_args+=("$1")
+            shift
+            ;;
+        --help|-h)
+            echo "Usage: $0 [--profile PATH] [--ssh-private-key PATH] [Jepsen options]"
+            exit 0
+            ;;
+        *)
+            jepsen_args+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [[ "$profile_path" != /* ]]; then
+    profile_path="$(pwd)/${profile_path}"
+fi
+
+if [[ ! -f "$profile_path" ]]; then
+    echo "Profile file not found: $profile_path" >&2
+    exit 2
+fi
+
+mkdir -p /root/.ssh
+touch /root/.ssh/known_hosts
+chmod 600 /root/.ssh/known_hosts
+
+for n in 1 2 3; do
+    ssh-keyscan -t rsa "patroni$n" "etcd$n" >> /root/.ssh/known_hosts 2>/dev/null
+done
+
+cd "$script_dir"
+export JEPSEN_HA_PROFILE="$profile_path"
+if [[ "${explicit_ssh_key}" == false && -n "${JEPSEN_SSH_PRIVATE_KEY:-}" ]]; then
+    jepsen_args=(--ssh-private-key "$JEPSEN_SSH_PRIVATE_KEY" "${jepsen_args[@]}")
+fi
+exec lein run test "${jepsen_args[@]}"

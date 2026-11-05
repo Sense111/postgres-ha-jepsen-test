@@ -1,0 +1,31 @@
+
+switchover:
+  max-attempts: 3
+  pause-seconds: 60
+
+convergence:
+  poll-interval-seconds: 1
+  stable-samples: 3
+  timeout-seconds: 60
+
+nemesis:
+  cycles: 6
+  duration-seconds: 60
+  interval-seconds: 30
+
+nodes:
+  - id: node-a
+    ssh-host: patroni1
+  - id: node-b
+    ssh-host: patroni2
+  - id: node-c
+    ssh-host: patroni3
+
+patroni:
+  nodes:
+    node-a:
+      rest-api: http://patroni1:8008
+    node-b:
+      rest-api: http://patroni2:8008
+    node-c:
+      rest-api: http://patroni3:8008

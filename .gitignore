@@ -1,0 +1,6 @@
+store/
+target/
+.lein-failures
+.nrepl-port
+.clj-kondo/
+.lsp/
